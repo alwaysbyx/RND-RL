@@ -1,0 +1,5 @@
+scripts/
+runs/
+wandb/
+**/__pycache__/
+**/*.pyc
