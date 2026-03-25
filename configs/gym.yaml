@@ -1,0 +1,51 @@
+# Gymnasium environment configuration
+env_type: "gym"
+env_id: "HalfCheetah-v4"
+
+# Experiment settings
+exp_name: null
+seed: 1
+torch_deterministic: true
+cuda: true
+track: false
+wandb_project_name: "cleanRL"
+wandb_entity: "alwaysbb"
+wandb_group: "PPO"
+capture_video: false
+save_model: false
+evaluate: false
+checkpoint: null
+
+# Environment settings
+num_envs: 16
+num_eval_envs: 8
+num_steps: 1024
+num_eval_steps: 1000
+
+# Algorithm hyperparameters
+total_timesteps: 500_0000
+learning_rate: 3e-4
+anneal_lr: true
+gamma: 0.99
+gae_lambda: 0.95
+num_minibatches: 64
+update_epochs: 10
+norm_adv: true
+clip_coef: 0.2
+clip_vloss: true
+ent_coef: 0.0
+vf_coef: 0.5
+max_grad_norm: 0.5
+target_kl: null
+reward_scale: 1.0
+finite_horizon_gae: false
+eval_freq: 1
+
+# Network architecture
+discrete_action: true
+num_bins: 41
+actor_width: 256
+actor_depth: 2
+critic_width: 64
+critic_depth: 2 
+use_residual_blocks: true

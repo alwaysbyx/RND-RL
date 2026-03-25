@@ -1,0 +1,58 @@
+# ManiSkill state-based environment configuration
+env_type: "maniskill-state"
+env_id: "PickCube-v1"
+
+# Experiment settings
+exp_name: null
+seed: 1
+torch_deterministic: true
+cuda: true
+track: false
+wandb_project_name: "ManiSkill"
+wandb_entity: "alwaysbb"
+wandb_group: "PPO"
+capture_video: false
+save_trajectory: false
+save_model: false
+evaluate: false
+checkpoint: null
+
+# Environment settings
+num_envs: 1024
+num_eval_envs: 8
+num_steps: 50
+num_eval_steps: 50
+partial_reset: true
+eval_partial_reset: false
+reconfiguration_freq: null
+eval_reconfiguration_freq: 1
+control_mode: "pd_joint_delta_pos"
+save_train_video_freq: null
+
+# Algorithm hyperparameters
+total_timesteps: 50_000_000
+learning_rate: 3e-4
+anneal_lr: false
+gamma: 0.8
+gae_lambda: 0.9
+num_minibatches: 32
+update_epochs: 4
+norm_adv: true
+clip_coef: 0.2
+clip_vloss: false
+ent_coef: 0.0
+vf_coef: 0.5
+max_grad_norm: 0.5
+target_kl: 0.1
+reward_scale: 1.0
+finite_horizon_gae: false
+eval_freq: 25
+
+# Network architecture
+discrete_action: true
+num_bins: 41
+actor_width: 128
+actor_depth: 2
+critic_width: 256
+critic_depth: 3
+use_residual_blocks: true
