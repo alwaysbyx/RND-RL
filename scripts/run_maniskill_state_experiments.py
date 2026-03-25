@@ -5,32 +5,25 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue
 
 # Environment configurations
 ENV_CONFIGS = [
-    # {"env_id": "PushCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
-    # {"env_id": "PickCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
-    # {"env_id": "PickCubeSO100-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=8"},
-    # {"env_id": "PushT-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16 --gamma=0.99 --num-eval-steps=100"},
-    # {"env_id": "StackCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": ""},
-    # {"env_id": "RollBall-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16 --num-eval-steps=80 --gamma=0.95"},
-    # {"env_id": "PullCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
-    # {"env_id": "PokeCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
-    # {"env_id": "LiftPegUpright-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
-    {"env_id": "PickSingleYCB-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16"},
+    {"env_id": "StackCube-v1", "num_envs": 1024, "total_timesteps": 50_000_000, "extra": ""},
 ]
 
 # Seeds to run for each environment
 SEEDS = [0, 1, 2, 3, 4]
 
+# Bin sweep
+NUM_BINS = [2, 3, 5]
+
 # GPU and concurrency settings
-NUM_GPUS = 2  # Number of GPUs to use (set to None to use all available)
-MAX_CONCURRENT_TASKS = 4  # Maximum number of tasks to run simultaneously
+GPU_IDS = [1]            # Physical GPUs to use (round-robin)
+MAX_CONCURRENT_TASKS = 1    # One job per card
 
 # Common settings for all environments
 COMMON_SETTINGS = {
-    "wandb_project_name": "maniskill_state_final",
+    "wandb_project_name": "rnd-bin-sweep",
     "wandb_entity": "jif005-ucsd",
     "track": True,
 }
@@ -99,17 +92,17 @@ def parse_extra_args(extra_str: str):
     return overrides
 
 
-def run_experiment(env_config: dict, seed: int, common_settings: dict, gpu_id: int = None):
+def run_experiment(env_config: dict, seed: int, num_bins: int, common_settings: dict, gpu_id: int = None):
     """Run a single experiment for the given environment and seed."""
     env_id = env_config["env_id"]
-    task_name = f"{env_id}_seed{seed}"
+    task_name = f"{env_id}_bins{num_bins}_seed{seed}"
     gpu_str = f" (GPU {gpu_id})" if gpu_id is not None else ""
     print("=" * 50)
     print(f"Running experiment for: {task_name}{gpu_str}")
     print("=" * 50)
     
     # Build overrides list
-    overrides = [f"env_id={env_id}", f"seed={seed}"]
+    overrides = [f"env_id={env_id}", f"seed={seed}", f"num_bins={num_bins}"]
     
     # Add environment-specific settings
     if "num_envs" in env_config:
@@ -175,55 +168,37 @@ def run_experiment(env_config: dict, seed: int, common_settings: dict, gpu_id: i
 
 def main():
     """Run all experiments with GPU and concurrency management."""
-    total_experiments = len(ENV_CONFIGS) * len(SEEDS)
-    
-    # Get available GPUs
-    available_gpus = get_available_gpus()
-    if NUM_GPUS is not None:
-        available_gpus = available_gpus[:NUM_GPUS]
-    
+    total_experiments = len(ENV_CONFIGS) * len(NUM_BINS) * len(SEEDS)
+
     print("Starting batch experiments for ManiSkill state environments")
-    print(f"Total environments: {len(ENV_CONFIGS)}")
-    print(f"Seeds per environment: {len(SEEDS)}")
-    print(f"Total experiments: {total_experiments}")
-    print(f"Available GPUs: {len(available_gpus)} ({available_gpus if available_gpus else 'None'})")
-    print(f"Max concurrent tasks: {MAX_CONCURRENT_TASKS}")
+    print(f"Environments: {[c['env_id'] for c in ENV_CONFIGS]}")
+    print(f"Bins: {NUM_BINS}, Seeds: {SEEDS}")
+    print(f"Total experiments: {total_experiments}, GPUs: {GPU_IDS}, Max concurrent: {MAX_CONCURRENT_TASKS}")
     print()
-    
-    # Create task queue
+
+    # Create task list with round-robin GPU assignment
     tasks = []
-    for env_config in ENV_CONFIGS:
-        env_id = env_config["env_id"]
-        for seed in SEEDS:
-            tasks.append((env_config, seed))
-    
-    # GPU assignment queue (round-robin)
-    gpu_queue = Queue()
-    if available_gpus:
-        # Fill queue with GPU IDs in round-robin fashion
-        for i in range(len(tasks)):
-            gpu_queue.put(available_gpus[i % len(available_gpus)])
-    else:
-        # No GPUs available, use None for all tasks
-        for _ in range(len(tasks)):
-            gpu_queue.put(None)
-    
+    for i, (env_config, num_bins, seed) in enumerate(
+        (e, b, s) for e in ENV_CONFIGS for b in NUM_BINS for s in SEEDS
+    ):
+        gpu_id = GPU_IDS[i % len(GPU_IDS)]
+        tasks.append((env_config, seed, num_bins, gpu_id))
+
     # Run experiments with concurrency control
     results = []
     start_time = time.time()
-    
+
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
         # Submit all tasks
         future_to_task = {}
-        for env_config, seed in tasks:
-            gpu_id = gpu_queue.get()
-            future = executor.submit(run_experiment, env_config, seed, COMMON_SETTINGS, gpu_id)
+        for env_config, seed, num_bins, gpu_id in tasks:
+            future = executor.submit(run_experiment, env_config, seed, num_bins, COMMON_SETTINGS, gpu_id)
             future_to_task[future] = (env_config["env_id"], seed, gpu_id)
-        
+
         # Collect results as they complete
         completed = 0
         for future in as_completed(future_to_task):
-            env_id, seed, gpu_id = future_to_task[future]
+            env_id, seed, _ = future_to_task[future]
             try:
                 result = future.result()
                 results.append(result)
@@ -237,22 +212,20 @@ def main():
             except Exception as e:
                 print(f"Exception for {env_id} seed={seed}: {e}")
                 results.append((env_id, seed, False))
-    
+
     # Print summary
     print("\n" + "=" * 50)
     print("Experiment Summary")
     print("=" * 50)
-    
-    # Group by environment
+
     for env_config in ENV_CONFIGS:
         env_id = env_config["env_id"]
         env_results = [(s, success) for eid, s, success in results if eid == env_id]
         print(f"\n{env_id}:")
         for seed, success in env_results:
-            status = "✓ SUCCESS" if success else "✗ FAILED"
+            status = "SUCCESS" if success else "FAILED"
             print(f"  seed={seed}: {status}")
-    
-    # Count successes
+
     num_success = sum(1 for _, _, success in results if success)
     total_time = time.time() - start_time
     print(f"\nTotal: {num_success}/{total_experiments} experiments completed successfully")

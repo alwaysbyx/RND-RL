@@ -9,29 +9,27 @@ from queue import Queue
 
 # Environment configurations
 ENV_CONFIGS = [
-    {"env_id": "HalfCheetah-v4"},
-    {"env_id": "Hopper-v4"},
-    {"env_id": "Ant-v4"},
-    {"env_id": "Walker2d-v4"},
     {"env_id": "Humanoid-v4"},
 ]
 
 # Seeds to run for each environment
 SEEDS = [0, 1, 2, 3, 4]
 
+# Bin sweep
+NUM_BINS = [2, 3, 5]
+
 # GPU and concurrency settings
-NUM_GPUS = 2  # Number of GPUs to use (set to None to use all available)
-MAX_CONCURRENT_TASKS = 10  # Maximum number of tasks to run simultaneously
+GPU_ID = 0                  # Physical GPU to use
+MAX_CONCURRENT_TASKS = 1    # One job at a time on this card
 
 # Common settings for all environments
 COMMON_SETTINGS = {
     "total_timesteps": 5_000_000,
     "num_envs": 16,
     "num_steps": 1024,
-    "num_bins": 41,
     "critic_width": 64,
     "critic_depth": 2,
-    "wandb_project_name": "rnd-final",
+    "wandb_project_name": "rnd-bin-sweep",
     "wandb_entity": "jif005-ucsd",
     "track": True,
 }
@@ -56,16 +54,16 @@ def get_available_gpus():
         return []
 
 
-def run_experiment(env_id: str, seed: int, common_settings: dict, gpu_id: int = None):
+def run_experiment(env_id: str, seed: int, num_bins: int, common_settings: dict, gpu_id: int = None):
     """Run a single experiment for the given environment and seed."""
-    task_name = f"{env_id}_seed{seed}"
+    task_name = f"{env_id}_bins{num_bins}_seed{seed}"
     gpu_str = f" (GPU {gpu_id})" if gpu_id is not None else ""
     print("=" * 50)
     print(f"Running experiment for: {task_name}{gpu_str}")
     print("=" * 50)
     
     # Build overrides list
-    overrides = [f"env_id={env_id}", f"seed={seed}"]
+    overrides = [f"env_id={env_id}", f"seed={seed}", f"num_bins={num_bins}"]
     for key, value in common_settings.items():
         if isinstance(value, bool):
             overrides.append(f"{key}={str(value).lower()}")
@@ -114,50 +112,31 @@ def run_experiment(env_id: str, seed: int, common_settings: dict, gpu_id: int = 
 
 def main():
     """Run all experiments with GPU and concurrency management."""
-    total_experiments = len(ENV_CONFIGS) * len(SEEDS)
-    
-    # Get available GPUs
-    available_gpus = get_available_gpus()
-    if NUM_GPUS is not None:
-        available_gpus = available_gpus[:NUM_GPUS]
-    
+    total_experiments = len(ENV_CONFIGS) * len(NUM_BINS) * len(SEEDS)
+
     print("Starting batch experiments for Gymnasium environments")
-    print(f"Total environments: {len(ENV_CONFIGS)}")
-    print(f"Seeds per environment: {len(SEEDS)}")
-    print(f"Total experiments: {total_experiments}")
-    print(f"Available GPUs: {len(available_gpus)} ({available_gpus if available_gpus else 'None'})")
-    print(f"Max concurrent tasks: {MAX_CONCURRENT_TASKS}")
+    print(f"Environments: {[c['env_id'] for c in ENV_CONFIGS]}")
+    print(f"Bins: {NUM_BINS}, Seeds: {SEEDS}")
+    print(f"Total experiments: {total_experiments}, GPU: {GPU_ID}, Max concurrent: {MAX_CONCURRENT_TASKS}")
     print()
-    
-    # Create task queue
+
+    # Create task list
     tasks = []
     for env_config in ENV_CONFIGS:
-        env_id = env_config["env_id"]
-        for seed in SEEDS:
-            tasks.append((env_id, seed))
-    
-    # GPU assignment queue (round-robin)
-    gpu_queue = Queue()
-    if available_gpus:
-        # Fill queue with GPU IDs in round-robin fashion
-        for i in range(len(tasks)):
-            gpu_queue.put(available_gpus[i % len(available_gpus)])
-    else:
-        # No GPUs available, use None for all tasks
-        for _ in range(len(tasks)):
-            gpu_queue.put(None)
-    
+        for num_bins in NUM_BINS:
+            for seed in SEEDS:
+                tasks.append((env_config["env_id"], seed, num_bins))
+
     # Run experiments with concurrency control
     results = []
     start_time = time.time()
-    
+
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
         # Submit all tasks
         future_to_task = {}
-        for env_id, seed in tasks:
-            gpu_id = gpu_queue.get()
-            future = executor.submit(run_experiment, env_id, seed, COMMON_SETTINGS, gpu_id)
-            future_to_task[future] = (env_id, seed, gpu_id)
+        for env_id, seed, num_bins in tasks:
+            future = executor.submit(run_experiment, env_id, seed, num_bins, COMMON_SETTINGS, GPU_ID)
+            future_to_task[future] = (env_id, seed, GPU_ID)
         
         # Collect results as they complete
         completed = 0
@@ -181,14 +160,13 @@ def main():
     print("\n" + "=" * 50)
     print("Experiment Summary")
     print("=" * 50)
-    
-    # Group by environment
+
     for env_config in ENV_CONFIGS:
         env_id = env_config["env_id"]
         env_results = [(s, success) for eid, s, success in results if eid == env_id]
         print(f"\n{env_id}:")
         for seed, success in env_results:
-            status = "✓ SUCCESS" if success else "✗ FAILED"
+            status = "SUCCESS" if success else "FAILED"
             print(f"  seed={seed}: {status}")
     
     # Count successes

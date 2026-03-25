@@ -319,14 +319,26 @@ if __name__ == "__main__":
     train_args = SimpleArgs(config)
     
     action_space = eval_envs.single_action_space if hasattr(eval_envs, 'single_action_space') else eval_envs.unwrapped.single_action_space
-    agent = Agent(
-        n_obs=n_obs,
-        n_act=n_act,
-        action_space=action_space,
-        args=train_args,
-        device=device,
-        sample_obs=sample_obs,
-    ).to(device)
+    algorithm = config.get("algorithm", "ppo")
+    if algorithm == "ppocma":
+        from ppocma import PPOCMAAgent
+        agent = PPOCMAAgent(
+            n_obs=n_obs,
+            n_act=n_act,
+            action_space=action_space,
+            args=train_args,
+            device=device,
+            sample_obs=sample_obs,
+        ).to(device)
+    else:
+        agent = Agent(
+            n_obs=n_obs,
+            n_act=n_act,
+            action_space=action_space,
+            args=train_args,
+            device=device,
+            sample_obs=sample_obs,
+        ).to(device)
     
     # Load checkpoint
     print(f"Loading checkpoint from {args.checkpoint}")
