@@ -74,6 +74,10 @@ class Args:
     norm_adv: bool = True
     clip_coef: float = 0.2
     clip_vloss: bool = True
+    algo: str = "ppo"
+    """which policy loss to use: 'ppo' (clipped) or 'spo' (SPO objective)"""
+    spo_eps: float = 0.2
+    """epsilon in SPO objective (controls strength of quadratic penalty)"""
     ent_coef: float = 0.0
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
@@ -570,9 +574,15 @@ if __name__ == "__main__":
                 if args.norm_adv:
                     mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                if args.algo == "ppo":
+                    pg_loss1 = -mb_advantages * ratio
+                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                elif args.algo == "spo":
+                    spo_obj = ratio * mb_advantages - (mb_advantages.abs() / (2.0 * args.spo_eps)) * (ratio - 1.0).pow(2)
+                    pg_loss = (-spo_obj).mean()
+                else:
+                    raise ValueError(f"Unknown algo={args.algo}. Use 'ppo' or 'spo'.")
 
                 newvalue = newvalue.view(-1)
                 if args.clip_vloss:
