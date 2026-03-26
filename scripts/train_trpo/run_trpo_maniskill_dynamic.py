@@ -56,9 +56,9 @@ SEEDS = [0, 1, 2, 3, 4]
 # ---------------------------------------------------------------------------
 
 GPU_IDS = [4, 5, 6, 7]
-VRAM_THRESHOLD_MB = 12_000   # Need 12 GB free to launch a task (~10 GB + margin)
-VRAM_SAFETY_MB = 19_000      # Keep 19 GB free per GPU (target ~80% of 96 GB)
-POLL_INTERVAL = 30           # Seconds between scheduling checks
+VRAM_THRESHOLD_MB = 25_000   # Need 12 GB free to launch a task (~10 GB + margin)
+VRAM_SAFETY_MB = 25_000      # Keep 19 GB free per GPU (target ~80% of 96 GB)
+POLL_INTERVAL = 120           # Seconds between scheduling checks
 
 # ---------------------------------------------------------------------------
 # Wandb settings
