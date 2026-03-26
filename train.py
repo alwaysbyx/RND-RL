@@ -91,7 +91,7 @@ class Args:
     critic_width: int = 256
     critic_depth: int = 3
     use_residual_blocks: bool = False
-    gradient_log: bool = False
+    gradient_log: bool = True
     """if toggled, compute and log actor gradient variance to wandb"""
 
     # Runtime-computed
