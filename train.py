@@ -91,11 +91,36 @@ class Args:
     critic_width: int = 256
     critic_depth: int = 3
     use_residual_blocks: bool = False
+    gradient_log: bool = False
+    """if toggled, compute and log actor gradient variance to wandb"""
 
     # Runtime-computed
     batch_size: int = 0
     minibatch_size: int = 0
     num_iterations: int = 0
+
+
+def update_var(vec, pg_var):
+    """Welford's online algorithm for tracking gradient variance."""
+    if pg_var["mean"] is None:
+        pg_var["mean"] = vec.clone()
+        pg_var["M2"] = torch.zeros_like(vec)
+        pg_var["count"] = 1
+    else:
+        pg_var["count"] += 1
+        delta = vec - pg_var["mean"]
+        pg_var["mean"] += delta / pg_var["count"]
+        delta2 = vec - pg_var["mean"]
+        pg_var["M2"] += delta * delta2
+
+
+def grad_vector(params):
+    """Flatten and concatenate gradients from actor parameters."""
+    flat = []
+    for p in params:
+        if p.grad is not None:
+            flat.append(p.grad.detach().flatten())
+    return torch.cat(flat) if flat else torch.tensor([])
 
 
 class Logger:
@@ -518,6 +543,10 @@ if __name__ == "__main__":
         agent.train()
         b_inds = np.arange(args.batch_size)
         clipfracs = []
+        if args.gradient_log:
+            pg_var = {"count": 0, "mean": None, "M2": None}
+            grad_norm_sum = 0.0
+            grad_norm_count = 0
         update_time = time.perf_counter()
         for epoch in range(args.update_epochs):
             np.random.shuffle(b_inds)
@@ -560,6 +589,15 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad()
                 loss.backward()
+
+                if args.gradient_log:
+                    actor_params = [p for n, p in agent.named_parameters() if "critic" not in n]
+                    g = grad_vector(actor_params)
+                    if g.numel() > 0:
+                        update_var(g, pg_var)
+                        grad_norm_sum += g.norm().item()
+                        grad_norm_count += 1
+
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
 
@@ -590,6 +628,24 @@ if __name__ == "__main__":
             logger.add_scalar("time/rollout_fps", args.num_envs * args.num_steps / rollout_time, global_step)
             for k, v in cumulative_times.items():
                 logger.add_scalar(f"time/total_{k}", v, global_step)
+
+            if args.gradient_log:
+                if pg_var["count"] > 1:
+                    var = pg_var["M2"] / (pg_var["count"] - 1)
+                    grad_var_scalar = var.mean().item()
+                    grad_norm_mean = grad_norm_sum / grad_norm_count if grad_norm_count > 0 else 0.0
+                    grad_var_normalized = (var / (grad_norm_mean ** 2 + 1e-8)).mean().item()
+                else:
+                    grad_var_scalar = 0.0
+                    grad_norm_mean = 0.0
+                    grad_var_normalized = 0.0
+                logger.add_scalar("losses/policy_grad_var", grad_var_scalar, global_step)
+                logger.add_scalar("losses/policy_grad_norm", grad_norm_mean, global_step)
+                logger.add_scalar("losses/policy_grad_var_normalized", grad_var_normalized, global_step)
+                if not args.discrete_action and hasattr(agent, "actor_logstd"):
+                    logstd = agent.actor_logstd.detach()
+                    logger.add_scalar("charts/actor_logstd_mean", logstd.mean().item(), global_step)
+                    logger.add_scalar("charts/actor_std_mean", logstd.exp().mean().item(), global_step)
 
         if iteration % 10 == 0:
             print(f"Iteration: {iteration}, global_step: {global_step}, SPS: {int(global_step / (time.time() - start_time))}")
