@@ -9,7 +9,7 @@ torch_deterministic: true
 cuda: true
 track: false
 wandb_project_name: "cleanRL"
-wandb_entity: "alwaysbb"
+wandb_entity: null  # TODO: set to your wandb entity (or leave null to use default)
 wandb_group: "PPO"
 capture_video: false
 save_model: false

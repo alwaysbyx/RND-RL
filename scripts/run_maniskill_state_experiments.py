@@ -24,7 +24,7 @@ MAX_CONCURRENT_TASKS = 1    # One job per card
 # Common settings for all environments
 COMMON_SETTINGS = {
     "wandb_project_name": "rnd-bin-sweep",
-    "wandb_entity": "jif005-ucsd",
+    "wandb_entity": None,  # TODO: set to your wandb entity
     "track": True,
 }
 

@@ -5,15 +5,13 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue
 
 # Gym environment configurations
 GYM_ENV_CONFIGS = [
-    {"env_id": "HalfCheetah-v4"},
-    {"env_id": "Hopper-v4"},
-    {"env_id": "Ant-v4"},
-    {"env_id": "Walker2d-v4"},
+    # {"env_id": "HalfCheetah-v4"},
+    # {"env_id": "Hopper-v4"},
+    # {"env_id": "Ant-v4"},
+    # {"env_id": "Walker2d-v4"},
     {"env_id": "Humanoid-v4"},
 ]
 
@@ -23,12 +21,12 @@ MANISKILL_STATE_ENV_CONFIGS = [
     # {"env_id": "PickCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
     # {"env_id": "PickCubeSO100-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=8"},
     # {"env_id": "PushT-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16 --gamma=0.99 --num-eval-steps=100"},
-    # {"env_id": "StackCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": ""},
+    {"env_id": "StackCube-v1", "num_envs": 4096, "total_timesteps": 200_000_000, "extra": ""},
     # {"env_id": "RollBall-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16 --num-eval-steps=80 --gamma=0.95"},
     # {"env_id": "PullCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
     # {"env_id": "PokeCube-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
     # {"env_id": "LiftPegUpright-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=4"},
-    {"env_id": "PickSingleYCB-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16"},
+    # {"env_id": "PickSingleYCB-v1", "num_envs": 4096, "total_timesteps": 50_000_000, "extra": "--num-steps=16"},
 ]
 
 # Methods to evaluate
@@ -42,31 +40,32 @@ METHOD_CONFIGS = [
 # Seeds to run for each environment and method
 SEEDS = [0, 1, 2, 3, 4]
 
-# GPU and concurrency settings
-NUM_GPUS = 1
-MAX_CONCURRENT_TASKS = 5
+# GPU and scheduling settings
+GPUS = [4, 5, 6, 7]                # Which GPUs to use
+UTILIZATION_THRESHOLD = 80          # Launch new task only if GPU util < this %
+CHECK_INTERVAL = 60                 # Seconds between scheduling checks
 
 # One shared W&B project for all runs
 GLOBAL_COMMON_SETTINGS = {
-    "wandb_project_name": "gym_maniskill_state_final",
+    "wandb_project_name": "ablation_extend",
     "wandb_entity": None,  # TODO: set to your wandb entity
     "track": True,
 }
 
 TASK_FAMILIES = [
-    # {
-    #     "name": "gym",
-    #     "base_config": "configs/gym.yaml",
-    #     "env_configs": GYM_ENV_CONFIGS,
-    #     "common_settings": {
-    #         "total_timesteps": 5_000_000,
-    #         "num_envs": 16,
-    #         "num_steps": 1024,
-    #         "num_bins": 41,
-    #         "critic_width": 64,
-    #         "critic_depth": 2,
-    #     },
-    # },
+    {
+        "name": "gym",
+        "base_config": "configs/gym.yaml",
+        "env_configs": GYM_ENV_CONFIGS,
+        "common_settings": {
+            "total_timesteps": 20_000_000,
+            "num_envs": 16,
+            "num_steps": 1024,
+            "num_bins": 41,
+            "critic_width": 64,
+            "critic_depth": 2,
+        },
+    },
     {
         "name": "maniskill_state",
         "base_config": "configs/maniskill-state.yaml",
@@ -76,20 +75,33 @@ TASK_FAMILIES = [
 ]
 
 
-def get_available_gpus():
-    """Get list of available GPU IDs."""
+def get_gpu_utilization(gpu_ids):
+    """Query GPU utilization (%) for the given GPU IDs. Returns {gpu_id: util%}."""
     try:
+        id_str = ",".join(str(g) for g in gpu_ids)
         result = subprocess.run(
-            ["nvidia-smi", "--list-gpus"],
+            [
+                "nvidia-smi",
+                f"--id={id_str}",
+                "--query-gpu=index,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
             capture_output=True,
             text=True,
             check=True,
         )
-        gpu_count = len(result.stdout.strip().split("\n"))
-        return list(range(gpu_count))
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Warning: nvidia-smi not found, assuming no GPUs available")
-        return []
+        utils = {}
+        for line in result.stdout.strip().split("\n"):
+            parts = [p.strip() for p in line.split(",")]
+            gpu_id = int(parts[0])
+            mem_used = int(parts[2])
+            mem_total = int(parts[3])
+            mem_util = mem_used * 100 // mem_total if mem_total > 0 else 0
+            utils[gpu_id] = mem_util
+        return utils
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"Warning: nvidia-smi query failed: {e}")
+        return {g: 0 for g in gpu_ids}
 
 
 def parse_extra_args(extra_str: str):
@@ -165,17 +177,12 @@ def build_overrides(task_family: dict, env_config: dict, method_config: dict, se
     return overrides
 
 
-def run_experiment(task_family: dict, env_config: dict, method_config: dict, seed: int, gpu_id: int = None):
-    """Run a single experiment."""
+def launch_experiment(task_family: dict, env_config: dict, method_config: dict, seed: int, gpu_id: int):
+    """Launch a single experiment as a non-blocking subprocess. Returns (task_name, Popen, gpu_id)."""
     family_name = task_family["name"]
     env_id = env_config["env_id"]
     method_name = method_config["name"]
     task_name = f"{family_name}:{env_id}:{method_name}:seed{seed}"
-    gpu_str = f" (GPU {gpu_id})" if gpu_id is not None else ""
-
-    print("=" * 80)
-    print(f"Running experiment: {task_name}{gpu_str}")
-    print("=" * 80)
 
     overrides = build_overrides(task_family, env_config, method_config, seed)
     cmd = [
@@ -190,22 +197,17 @@ def run_experiment(task_family: dict, env_config: dict, method_config: dict, see
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
     env = os.environ.copy()
-    if gpu_id is not None:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    print(f"Command: {' '.join(cmd)}")
-    if gpu_id is not None:
-        print(f"Using GPU: {gpu_id}")
-    print()
+    log_dir = os.path.join(project_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"{task_name.replace(':', '_')}.log")
 
-    try:
-        subprocess.run(cmd, check=True, cwd=project_dir, env=env)
-        print(f"SUCCESS: {task_name}{gpu_str}\n")
-        return (family_name, env_id, method_name, seed, True)
-    except subprocess.CalledProcessError as err:
-        print(f"FAILED: {task_name}{gpu_str}")
-        print(f"Error: {err}\n")
-        return (family_name, env_id, method_name, seed, False)
+    print(f"[LAUNCH] {task_name} -> GPU {gpu_id}  (log: {log_file})")
+    fh = open(log_file, "w")
+    proc = subprocess.Popen(cmd, cwd=project_dir, env=env, stdout=fh, stderr=subprocess.STDOUT)
+
+    return task_name, proc, gpu_id, fh
 
 
 def build_tasks():
@@ -220,73 +222,91 @@ def build_tasks():
 
 
 def main():
-    """Run all experiments with GPU and concurrency management."""
+    """Run all experiments with dynamic GPU scheduling based on utilization."""
     tasks = build_tasks()
-    total_experiments = len(tasks)
+    total = len(tasks)
+    pending = list(tasks)  # Tasks waiting to be launched
 
-    available_gpus = get_available_gpus()
-    if NUM_GPUS is not None:
-        available_gpus = available_gpus[1:2]
-
-    print("Starting combined Gym + ManiSkill-state experiments")
-    print(f"Task families: {[family['name'] for family in TASK_FAMILIES]}")
-    print(f"Methods: {[method['name'] for method in METHOD_CONFIGS]}")
+    print("=" * 80)
+    print("Dynamic GPU Scheduler")
+    print("=" * 80)
+    print(f"Task families: {[f['name'] for f in TASK_FAMILIES]}")
+    print(f"Methods: {[m['name'] for m in METHOD_CONFIGS]}")
     print(f"Seeds per env/method: {len(SEEDS)}")
-    print(f"Total experiments: {total_experiments}")
-    print(f"Shared W&B project: {GLOBAL_COMMON_SETTINGS['wandb_project_name']}")
-    print(f"Available GPUs: {len(available_gpus)} ({available_gpus if available_gpus else 'None'})")
-    print(f"Max concurrent tasks: {MAX_CONCURRENT_TASKS}")
+    print(f"Total experiments: {total}")
+    print(f"GPUs: {GPUS}")
+    print(f"Utilization threshold: {UTILIZATION_THRESHOLD}%")
+    print(f"Check interval: {CHECK_INTERVAL}s")
+    print(f"W&B project: {GLOBAL_COMMON_SETTINGS['wandb_project_name']}")
     print()
 
-    gpu_queue = Queue()
-    if available_gpus:
-        for i in range(len(tasks)):
-            gpu_queue.put(available_gpus[i % len(available_gpus)])
-    else:
-        for _ in range(len(tasks)):
-            gpu_queue.put(None)
-
-    results = []
+    # running: list of (task_name, Popen, gpu_id, file_handle)
+    running = []
+    results = []  # (family, env, method, seed, success)
     start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
-        future_to_task = {}
-        for task_family, env_config, method_config, seed in tasks:
-            gpu_id = gpu_queue.get()
-            future = executor.submit(
-                run_experiment,
-                task_family,
-                env_config,
-                method_config,
-                seed,
-                gpu_id,
-            )
-            future_to_task[future] = (task_family["name"], env_config["env_id"], method_config["name"], seed)
+    while pending or running:
+        # 1) Check for finished processes
+        still_running = []
+        for task_name, proc, gpu_id, fh in running:
+            ret = proc.poll()
+            if ret is not None:
+                fh.close()
+                success = ret == 0
+                # Parse task_name back to components
+                parts = task_name.split(":")
+                results.append((parts[0], parts[1], parts[2], parts[3], success))
+                status = "SUCCESS" if success else f"FAILED (exit {ret})"
+                elapsed = time.time() - start_time
+                print(f"[{status}] {task_name} | GPU {gpu_id} | "
+                      f"Progress: {len(results)}/{total} | "
+                      f"Elapsed: {elapsed/60:.1f}min")
+            else:
+                still_running.append((task_name, proc, gpu_id, fh))
+        running = still_running
 
-        completed = 0
-        for future in as_completed(future_to_task):
-            family_name, env_id, method_name, seed = future_to_task[future]
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as err:  # pragma: no cover - defensive catch
-                print(f"Exception for {family_name}:{env_id}:{method_name}:seed{seed}: {err}")
-                results.append((family_name, env_id, method_name, seed, False))
+        # 2) If there are pending tasks, check GPU utilization and launch
+        if pending:
+            utils = get_gpu_utilization(GPUS)
+            # Find GPUs below threshold
+            free_gpus = [g for g in GPUS if utils.get(g, 0) < UTILIZATION_THRESHOLD]
 
-            completed += 1
-            elapsed = time.time() - start_time
-            avg_time = elapsed / completed if completed > 0 else 0
-            remaining = total_experiments - completed
-            eta = avg_time * remaining if remaining > 0 else 0
-            print(f"Progress: {completed}/{total_experiments} completed (ETA: {eta/60:.1f} minutes)")
+            if free_gpus:
+                # Count how many tasks are already running on each free GPU
+                running_per_gpu = defaultdict(int)
+                for _, _, gid, _ in running:
+                    running_per_gpu[gid] += 1
 
+                # Pick the GPU with fewest running tasks (load balance)
+                free_gpus.sort(key=lambda g: running_per_gpu[g])
+
+                # Launch one task on the least-loaded free GPU
+                gpu_id = free_gpus[0]
+                task_family, env_config, method_config, seed = pending.pop(0)
+                info = launch_experiment(task_family, env_config, method_config, seed, gpu_id)
+                running.append(info)
+                print(f"  [STATUS] Running: {len(running)} | Pending: {len(pending)} | "
+                      f"GPU utils: {{{', '.join(f'{g}: {utils.get(g,0)}%' for g in GPUS)}}}")
+
+                # If multiple GPUs are free, try to launch more without waiting
+                # (but re-query utilization next cycle)
+                continue  # Skip sleep, re-check immediately
+            else:
+                print(f"  [WAIT] All GPUs busy (utils: {{{', '.join(f'{g}: {utils.get(g,0)}%' for g in GPUS)}}})"
+                      f" | Running: {len(running)} | Pending: {len(pending)}")
+
+        # 3) Sleep before next check
+        if pending or running:
+            time.sleep(CHECK_INTERVAL)
+
+    # Summary
     print("\n" + "=" * 80)
     print("Experiment Summary")
     print("=" * 80)
 
     grouped = defaultdict(list)
-    for family_name, env_id, method_name, seed, success in results:
-        grouped[(family_name, env_id, method_name)].append((seed, success))
+    for family_name, env_id, method_name, seed_str, success in results:
+        grouped[(family_name, env_id, method_name)].append((seed_str, success))
 
     for task_family in TASK_FAMILIES:
         family_name = task_family["name"]
@@ -297,19 +317,19 @@ def main():
                 method_name = method_config["name"]
                 key = (family_name, env_id, method_name)
                 seed_results = grouped.get(key, [])
-                success_count = sum(1 for _, success in seed_results if success)
+                success_count = sum(1 for _, s in seed_results if s)
                 print(f"  {env_id} | {method_name}: {success_count}/{len(SEEDS)} successful")
 
-    num_success = sum(1 for _, _, _, _, success in results if success)
+    num_success = sum(1 for *_, s in results if s)
     total_time = time.time() - start_time
-    print(f"\nTotal: {num_success}/{total_experiments} experiments completed successfully")
+    print(f"\nTotal: {num_success}/{total} experiments completed successfully")
     print(f"Total time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
 
-    failed_runs = [(f, e, m, s) for f, e, m, s, ok in results if not ok]
-    if failed_runs:
+    failed = [r for r in results if not r[4]]
+    if failed:
         print("\nFailed runs:")
-        for family_name, env_id, method_name, seed in failed_runs:
-            print(f"  {family_name}:{env_id}:{method_name}:seed{seed}")
+        for f, e, m, s, _ in failed:
+            print(f"  {f}:{e}:{m}:{s}")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ COMMON_SETTINGS = {
     "critic_width": 64,
     "critic_depth": 2,
     "wandb_project_name": "rnd-bin-sweep",
-    "wandb_entity": "jif005-ucsd",
+    "wandb_entity": None,  # TODO: set to your wandb entity
     "track": True,
 }
 

@@ -22,7 +22,7 @@ MAX_CONCURRENT_TASKS = 1
 # Common settings for all environments
 COMMON_SETTINGS = {
     "wandb_project_name": "rnd-ppocma",
-    "wandb_entity": "jif005-ucsd",
+    "wandb_entity": None,  # TODO: set to your wandb entity
     "track": True,
 }
 

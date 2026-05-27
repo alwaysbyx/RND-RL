@@ -26,7 +26,7 @@ MAX_CONCURRENT_TASKS = 4  # Maximum number of tasks to run simultaneously
 # Common settings for all environments
 COMMON_SETTINGS = {
     "wandb_project_name": "maniskill_rgb_final",
-    "wandb_entity": "jif005-ucsd",
+    "wandb_entity": None,  # TODO: set to your wandb entity
     "track": True,
 }
 

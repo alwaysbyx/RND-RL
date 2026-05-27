@@ -1,5 +1,21 @@
-scripts/
-runs/
-wandb/
+# Python
 **/__pycache__/
 **/*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Training outputs
+runs/
+logs/
+wandb/
+checkpoints/
+*.pt
+*.pth
+
+# Script run logs
+scripts/*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

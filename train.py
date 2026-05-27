@@ -40,7 +40,7 @@ class Args:
     cuda: bool = True
     track: bool = False
     wandb_project_name: str = "PPO_Scale"
-    wandb_entity: Optional[str] = "alwaysbb"
+    wandb_entity: Optional[str] = None
     wandb_group: str = "PPO"
     capture_video: bool = False
     save_trajectory: bool = False
