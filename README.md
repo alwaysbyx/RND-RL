@@ -1,6 +1,6 @@
 <h1 align="center">RND-RL</h1>
 
-<h3 align="center"><i>RN-D: Discretized Categorical Actors with Regularized Networks for On-Policy Reinforcement Learning</i></h3>
+<h3 align="center"><i>RN-D: Discretized Categorical Actors for On-Policy Reinforcement Learning</i></h3>
 
 <p align="center">
   <b>Yuexin Bian</b><sup>1</sup> &nbsp;·&nbsp;
