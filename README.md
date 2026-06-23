@@ -12,7 +12,7 @@
   <br>
   <sup>1</sup>University of California San Diego &nbsp;&nbsp; 
   <br><br>
-  <b>ICML 2026</b>
+  <b>[ICML 2026](https://icml.cc/virtual/2026/poster/61217)</b>
 </p>
 
 <p align="center">
